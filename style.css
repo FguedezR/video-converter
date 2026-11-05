@@ -113,6 +113,11 @@ td.over { color: var(--danger); }
 td.ok { color: var(--accent); }
 td.dim { color: var(--muted); }
 td.nowrap { white-space: nowrap; }
+
+.progress { height: 2px; margin: 0 0 12px; background: var(--line-strong); }
+.progress[hidden] { display: none; }
+.progress span { display: block; width: 0; height: 100%; background: var(--accent); transition: width .2s linear; }
+.drop.busy { pointer-events: none; opacity: .5; }
 .hint { margin: 12px 0 0; color: var(--muted); font-size: 12px; }
 .hint:empty { display: none; }
 .hint .err { color: var(--danger); }

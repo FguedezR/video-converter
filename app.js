@@ -22,7 +22,9 @@ let source = null; // vídeo analizado: { file, input, videoTrack, audioTrack, w
 let trim = { start: 0, end: 0 };
 let support = null; // resultado de checkSupport() para la configuración actual
 let loadSeq = 0; // descarta análisis obsoletos si se suelta otro vídeo a mitad
-let outputs = []; // { name, blob } — se rellena en la fase 2
+let outputs = []; // { kind, blob, url, info } o { kind, error }: resultado de la última conversión
+let converting = null; // { conversion, canceled } mientras se codifica
+let convertedKey = ""; // ajustes con los que se generaron las salidas actuales
 
 /* ---------- Formato ---------- */
 
@@ -239,7 +241,7 @@ function renderEstimate() {
     const tr = document.createElement("tr");
     tr.appendChild(cell("Suelta un vídeo para ver la estimación.", "dim")).colSpan = 6;
     tbody.appendChild(tr);
-    $("convert").disabled = true;
+    updateButtons();
     return;
   }
   const s = settings();
@@ -302,8 +304,8 @@ function renderEstimate() {
   lines.push(` Rutas en el snippet: ${s.basePath}${names.webm}`);
   note.append(...lines);
 
-  // El motor de codificación llega en la fase 2.
-  $("convert").disabled = true;
+  if (outputs.length) renderResults(); // el slug o la versión cambian los nombres de la tabla
+  updateButtons();
 }
 
 // Cambios que afectan a la configuración del codificador: recalcular soporte y estimación.
@@ -382,6 +384,10 @@ function renderDrop() {
 }
 
 async function setFile(file, note = "") {
+  if (converting) {
+    $("summary").textContent = "Espera a que termine la conversión (o cancélala) antes de cargar otro vídeo.";
+    return;
+  }
   if (!isVideo(file)) {
     $("summary").textContent = `«${file.name}» no es un vídeo compatible: suelta un MP4, MOV o WebM.`;
     return;
@@ -398,9 +404,7 @@ async function setFile(file, note = "") {
     $("summary").textContent = `No se pudo leer «${file.name}»: ${err.message}.`;
     return;
   }
-  outputs = [];
-  $("zip").disabled = true;
-  $("results").hidden = true;
+  clearOutputs();
   $("slug").value = slugify(file.name.replace(/\.[^.]+$/, ""));
   trim = { start: 0, end: source.duration };
   setupTrim();
@@ -433,6 +437,243 @@ drop.addEventListener("drop", (e) => {
     return;
   }
   setFile(video, list.length > 1 ? ` Solo se procesa un vídeo cada vez: se ha usado «${video.name}».` : "");
+});
+
+/* ---------- Codificación ---------- */
+
+const OUTPUT_KINDS = [
+  { kind: "webm", label: "WebM (VP9)", codec: "vp9", audio: "opus", audioLabel: "Opus", mime: "video/webm" },
+  { kind: "mp4", label: "MP4 (H.264)", codec: "avc", audio: "aac", audioLabel: "AAC", mime: "video/mp4" },
+];
+const supportOf = (o) => (o.codec === "vp9" ? support?.vp9 : support?.avc);
+const audioSupported = (o) => (o.audio === "opus" ? support?.opus : support?.aac) !== false;
+
+// Lo que obliga a recodificar. El slug y la versión no: solo cambian los nombres.
+const settingsKey = (s) => JSON.stringify([source.file.name, source.file.size, s.width, s.height, s.fps, s.videoBitrate, s.audioBitrate, s.trim]);
+
+function updateButtons() {
+  const btn = $("convert");
+  if (converting) {
+    btn.textContent = "Cancelar";
+    btn.disabled = !!converting.canceled;
+    $("zip").disabled = true;
+    return;
+  }
+  btn.textContent = "Convertir";
+  const anyCodec = !support || support.vp9.ok || support.avc.ok;
+  const upToDate = !!source && outputs.length > 0 && settingsKey(settings()) === convertedKey;
+  btn.disabled = !source || !anyCodec || upToDate;
+  $("zip").disabled = !outputs.some((o) => o.blob);
+}
+
+function setBusy(busy) {
+  document.querySelectorAll(".controls input, .controls select, .trim input, .trim button").forEach((el) => (el.disabled = busy));
+  $("drop").classList.toggle("busy", busy);
+  $("progress").hidden = !busy;
+  if (!busy) $("progressBar").style.width = "0";
+}
+
+function clearOutputs() {
+  outputs.forEach((o) => o.url && URL.revokeObjectURL(o.url));
+  outputs = [];
+  convertedKey = "";
+  $("results").hidden = true;
+  $("results").querySelector("tbody").replaceChildren();
+}
+
+const DISCARD_REASONS = {
+  undecodable_source_codec: "el navegador no puede decodificar el original",
+  unknown_source_codec: "códec de origen desconocido",
+  no_encodable_target_codec: "el navegador no puede codificar este códec",
+};
+
+async function encode(o, s, onProgress) {
+  const M = window.Mediabunny;
+  const format = o.kind === "webm"
+    ? new M.WebMOutputFormat()
+    // fastStart "in-memory": el índice (moov) se escribe al principio del archivo.
+    : new M.Mp4OutputFormat({ fastStart: "in-memory" });
+  const output = new M.Output({ format, target: new M.BufferTarget() });
+  const withAudio = s.audioBitrate > 0 && audioSupported(o);
+  const conversion = await M.Conversion.init({
+    input: source.input,
+    output,
+    tracks: "primary",
+    video: {
+      codec: o.codec,
+      width: s.width,
+      height: s.height,
+      fit: "cover", // las dimensiones ya conservan la proporción; cover evita bandas por redondeo a par
+      ...(source.fps > MAX_FPS + 0.01 ? { frameRate: MAX_FPS } : {}), // por debajo de 30 se respeta el original
+      // VP9 (libvpx por software en Chrome) se pasa ~10 % del objetivo en modo variable con vídeos de muchos
+      // cortes; en constante clava el peso estimado con la misma calidad que el H.264. H.264 respeta el
+      // objetivo en variable, que reparte mejor los bits.
+      quality: new M.Quality({ bitrate: s.videoBitrate, bitrateMode: o.codec === "vp9" ? "constant" : "variable" }),
+      keyFrameInterval: KEYFRAME_INTERVAL,
+      allowTransformationMetadata: false, // la rotación se aplica a los fotogramas, sin metadatos
+      forceTranscode: true,
+    },
+    audio: withAudio
+      ? { codec: o.audio, quality: new M.Quality({ bitrate: s.audioBitrate }), forceTranscode: true }
+      : { discard: true },
+    trim: { start: s.trim.start, end: s.trim.end },
+    tags: {}, // sin metadatos descriptivos
+    showWarnings: false,
+  });
+  const lostVideo = conversion.discardedTracks.find((d) => d.track === source.videoTrack);
+  if (!conversion.isValid || lostVideo) {
+    throw new Error(DISCARD_REASONS[lostVideo?.reason] || "no se pudo preparar la conversión");
+  }
+  converting.conversion = conversion;
+  conversion.onProgress = onProgress;
+  await conversion.execute();
+  return new Blob([output.target.buffer], { type: o.mime });
+}
+
+// Lee la salida con Mediabunny para el informe (lo mismo que se midió del original).
+async function probe(blob) {
+  const M = window.Mediabunny;
+  const input = new M.Input({ formats: M.ALL_FORMATS, source: new M.BlobSource(blob) });
+  try {
+    const vt = await input.getPrimaryVideoTrack();
+    const at = await input.getPrimaryAudioTrack();
+    const [width, height, duration, fpsMetrics, videoCodec] = await Promise.all([
+      vt.getDisplayWidth(), vt.getDisplayHeight(), input.computeDuration(), vt.computeFrameRateMetrics(), vt.getCodec(),
+    ]);
+    return {
+      width, height, duration, videoCodec,
+      fps: fpsMetrics.bestGuessFrameRate,
+      bitrate: duration ? blob.size * 8 / duration : 0,
+      audioCodec: at ? await at.getCodec() : null,
+    };
+  } finally {
+    input.dispose();
+  }
+}
+
+function showProgress(o, i, total, p, started) {
+  const overall = (i + p) / total;
+  $("progressBar").style.width = (overall * 100).toFixed(1) + "%";
+  const elapsed = (performance.now() - started) / 1000;
+  const eta = p > 0.03 ? Math.max(0, Math.round(elapsed / p * (1 - p))) : null;
+  $("summary").textContent = `Codificando ${o.label} · ${i + 1} de ${total} · ${Math.round(p * 100)} %${eta !== null ? ` · ≈ ${eta} s restantes` : ""}`;
+}
+
+function renderResults() {
+  const s = settings();
+  const target = Math.max(0.1, +$("targetMb").value || 8) * 1048576;
+  const tbody = $("results").querySelector("tbody");
+  const orig = document.createElement("tr");
+  orig.append(
+    cell(source.file.name + " (original)", "dim"),
+    cell(fmt(source.file.size), "num dim"),
+    cell(source.bitrate ? fmtRate(source.bitrate) : "—", "num dim"),
+    cell(`${source.width}×${source.height}`, "num dim"),
+    cell(source.fps ? fmtFps(source.fps) : "—", "num dim"),
+    cell(num(source.duration) + " s", "num dim"),
+    cell(""),
+  );
+  const rows = [orig];
+  for (const o of outputs) {
+    const def = OUTPUT_KINDS.find((k) => k.kind === o.kind);
+    const tr = document.createElement("tr");
+    if (o.error) {
+      tr.append(cell(def.label), cell("Error: " + o.error, "err"));
+      tr.lastChild.colSpan = 6;
+      rows.push(tr);
+      continue;
+    }
+    const name = fileNames({ ...s, height: o.info.height })[o.kind];
+    const saving = Math.round((1 - o.blob.size / source.file.size) * 100);
+    const codecs = codecName(o.info.videoCodec) + (o.info.audioCodec ? " + " + codecName(o.info.audioCodec) : " · sin audio");
+    tr.append(
+      cell(`${name} · ${codecs}`),
+      cell(`${fmt(o.blob.size)} (−${saving} %)`, "num " + (o.blob.size > target ? "over" : "ok")),
+      cell(fmtRate(o.info.bitrate), "num"),
+      cell(`${o.info.width}×${o.info.height}`, "num"),
+      cell(fmtFps(o.info.fps), "num"),
+      cell(num(o.info.duration) + " s", "num"),
+    );
+    const td = document.createElement("td");
+    td.className = "num";
+    const a = Object.assign(document.createElement("a"), { href: o.url, download: name, textContent: "↓ ." + o.kind });
+    td.appendChild(a);
+    tr.appendChild(td);
+    rows.push(tr);
+  }
+  tbody.replaceChildren(...rows);
+  $("results").hidden = false;
+}
+
+async function convert() {
+  const s = settings();
+  const key = settingsKey(s);
+  clearOutputs();
+  converting = { conversion: null, canceled: false };
+  setBusy(true);
+  updateButtons();
+  const t0 = performance.now();
+  const todo = OUTPUT_KINDS.filter((o) => supportOf(o)?.ok !== false);
+  for (const o of OUTPUT_KINDS) {
+    if (!todo.includes(o)) outputs.push({ kind: o.kind, error: "este navegador no puede codificarlo" });
+  }
+  for (const [i, o] of todo.entries()) {
+    if (converting.canceled) break;
+    const started = performance.now();
+    showProgress(o, i, todo.length, 0, started);
+    try {
+      const blob = await encode(o, s, (p) => showProgress(o, i, todo.length, p, started));
+      if (converting.canceled) break;
+      const info = await probe(blob);
+      outputs.push({ kind: o.kind, blob, info, url: URL.createObjectURL(blob) });
+    } catch (err) {
+      if (converting.canceled || err instanceof window.Mediabunny.ConversionCanceledError) break;
+      console.error(err);
+      outputs.push({ kind: o.kind, error: err.message || String(err) });
+    }
+    outputs.sort((a, b) => OUTPUT_KINDS.findIndex((k) => k.kind === a.kind) - OUTPUT_KINDS.findIndex((k) => k.kind === b.kind));
+    renderResults();
+  }
+  const canceled = converting.canceled;
+  converting = null;
+  setBusy(false);
+  const secs = Math.round((performance.now() - t0) / 1000);
+  if (canceled) {
+    clearOutputs();
+    $("summary").textContent = "Conversión cancelada.";
+  } else {
+    convertedKey = key;
+    const done = outputs.filter((o) => o.blob);
+    $("summary").textContent = done.length
+      ? `Listo en ${secs} s: ${done.map((o) => `${o.kind.toUpperCase()} ${fmt(o.blob.size)}`).join(" · ")} (original ${fmt(source.file.size)}).`
+      : "No se pudo generar ninguna salida.";
+    renderResults();
+  }
+  updateButtons();
+}
+
+$("convert").addEventListener("click", async () => {
+  if (!converting) return convert();
+  converting.canceled = true;
+  updateButtons();
+  $("summary").textContent = "Cancelando…";
+  try { await converting.conversion?.cancel(); } catch (e) {}
+});
+
+// ZIP provisional con los vídeos; en la fase 4 se añaden poster, snippet y cabeceras.
+$("zip").addEventListener("click", async () => {
+  const s = settings();
+  const zip = new JSZip();
+  for (const o of outputs.filter((o) => o.blob)) {
+    zip.file(fileNames({ ...s, height: o.info.height })[o.kind], o.blob);
+  }
+  // Vídeo e imágenes ya van comprimidos: STORE evita gastar tiempo en deflate.
+  const blob = await zip.generateAsync({ type: "blob", compression: "STORE" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = `${s.slug}-v${s.version}.zip`;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 5000);
 });
 
 /* ---------- Vista previa y recorte ---------- */
