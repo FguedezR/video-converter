@@ -92,8 +92,13 @@ input:disabled, select:disabled { opacity: .45; cursor: not-allowed; }
 .preview { position: relative; background: #000; border: 1px solid var(--line); aspect-ratio: 16 / 9; }
 .preview video { display: block; width: 100%; height: 100%; object-fit: contain; }
 .preview-error { position: absolute; inset: auto 12px 12px; margin: 0; color: var(--muted); font-size: 11px; }
-.trim { display: flex; flex-direction: column; gap: 16px; justify-content: center; }
-.trim .field { min-width: 0; }
+.preview canvas { display: block; width: 100%; height: 100%; object-fit: contain; }
+.trim, .side { display: flex; flex-direction: column; gap: 16px; justify-content: center; }
+.trim .field, .side .field { min-width: 0; }
+.side .field[hidden], .side .trim-foot[hidden] { display: none; }
+.side .hint { margin: 0; }
+.presets.compact { grid-template-columns: repeat(2, minmax(0, 1fr)); flex: none; }
+.presets.compact label { padding: 10px 12px; }
 .trim-foot { display: flex; flex-wrap: wrap; gap: 4px 20px; align-items: baseline; color: var(--muted); font-size: 11px; letter-spacing: .12em; text-transform: uppercase; }
 .trim-foot output { color: var(--fg); font-family: var(--pixel); font-size: 16px; letter-spacing: 0; margin-left: 6px; }
 .trim-foot .link { padding: 0; font-size: 11px; letter-spacing: .12em; text-transform: uppercase; }

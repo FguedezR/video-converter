@@ -31,7 +31,7 @@
       <input id="file" type="file" accept="video/mp4,video/quicktime,video/webm,.mp4,.mov,.m4v,.webm" hidden>
       <svg id="iconVideo" class="drop-icon" viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" aria-hidden="true" hidden><path d="M2.75 5.75h13.5v12.5H2.75z"/><path d="M16.25 10.25l5-3v9.5l-5-3"/></svg>
       <span id="dropTitle" class="drop-title">Suelta un vídeo</span>
-      <span id="dropHint" class="drop-hint">MP4 · MOV · WebM · un vídeo cada vez</span>
+      <span id="dropHint" class="drop-hint">MP4 · MOV · WebM · un vídeo cada vez · opcional: una imagen para el poster</span>
     </label>
 
     <section id="editor" class="editor" aria-label="Vista previa y recorte" hidden>
@@ -53,6 +53,29 @@
           <button id="playTrim" class="link" type="button">▶ Reproducir recorte</button>
           <button id="resetTrim" class="link" type="button">Sin recorte</button>
         </div>
+      </div>
+    </section>
+
+    <section id="posterPanel" class="editor" aria-label="Poster" hidden>
+      <div class="preview">
+        <canvas id="posterCanvas" width="16" height="9"></canvas>
+      </div>
+      <div class="side">
+        <fieldset class="presets compact">
+          <legend>Poster</legend>
+          <label><input type="radio" name="posterMode" value="frame" checked><span>Fotograma</span><small>del propio vídeo</small></label>
+          <label><input type="radio" name="posterMode" value="image"><span>Imagen propia</span><small>JPG · PNG · WebP · AVIF</small></label>
+        </fieldset>
+        <div id="posterTimeField" class="field">
+          <label for="posterTime">Fotograma en <output id="posterTimeOut">0:00.0</output></label>
+          <input id="posterTime" type="range" min="0" max="0" step="0.01" value="0">
+        </div>
+        <div id="posterImageField" class="trim-foot" hidden>
+          <span id="posterImageName">Sin imagen</span>
+          <button id="pickPoster" class="link" type="button">Elegir imagen…</button>
+        </div>
+        <input id="posterFile" type="file" accept="image/jpeg,image/png,image/webp,image/avif,image/gif" hidden>
+        <p id="posterInfo" class="hint"></p>
       </div>
     </section>
 

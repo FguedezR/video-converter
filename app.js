@@ -305,13 +305,15 @@ function renderEstimate() {
   note.append(...lines);
 
   if (outputs.length) renderResults(); // el slug o la versión cambian los nombres de la tabla
+  renderPosterInfo();
   updateButtons();
 }
 
-// Cambios que afectan a la configuración del codificador: recalcular soporte y estimación.
+// Cambios que afectan a la configuración del codificador: recalcular soporte, estimación y poster.
 let refreshTimer = 0;
 function refresh() {
   renderEstimate();
+  schedulePoster();
   clearTimeout(refreshTimer);
   refreshTimer = setTimeout(refreshSupport, 150);
 }
@@ -371,7 +373,7 @@ function renderDrop() {
   $("iconVideo").toggleAttribute("hidden", !loaded);
   if (!loaded) {
     $("dropTitle").textContent = "Suelta un vídeo";
-    $("dropHint").textContent = "MP4 · MOV · WebM · un vídeo cada vez";
+    $("dropHint").textContent = "MP4 · MOV · WebM · un vídeo cada vez · opcional: una imagen para el poster";
     return;
   }
   const s = source;
@@ -405,12 +407,14 @@ async function setFile(file, note = "") {
     return;
   }
   clearOutputs();
+  resetPoster();
   $("slug").value = slugify(file.name.replace(/\.[^.]+$/, ""));
   trim = { start: 0, end: source.duration };
   setupTrim();
   setupPreview(file);
   renderDrop();
   $("editor").hidden = false;
+  $("posterPanel").hidden = false;
   $("summary").textContent = `Vídeo listo. Elige preset y recorte.${note}`;
   refresh();
 }
@@ -429,14 +433,19 @@ const drop = $("drop");
 drop.addEventListener("keydown", (e) => {
   if (e.key === "Enter" || e.key === " ") { e.preventDefault(); $("file").click(); }
 });
-drop.addEventListener("drop", (e) => {
+// Se puede soltar el vídeo junto con una imagen (poster), o solo la imagen si ya hay vídeo.
+drop.addEventListener("drop", async (e) => {
   const list = [...e.dataTransfer.files];
   const video = list.find(isVideo);
+  const image = list.find(isImage);
+  if (!video && image && source && !converting) return setPosterImage(image);
   if (!video) {
     $("summary").textContent = list.length ? "No has soltado ningún vídeo compatible (MP4, MOV o WebM)." : "No se pudo leer lo soltado.";
     return;
   }
-  setFile(video, list.length > 1 ? ` Solo se procesa un vídeo cada vez: se ha usado «${video.name}».` : "");
+  const extra = list.filter((f) => f !== video && f !== image).length + list.filter(isVideo).length - 1;
+  await setFile(video, extra > 0 ? ` Solo se procesa un vídeo cada vez: se ha usado «${video.name}».` : "");
+  if (image && source?.file === video) setPosterImage(image);
 });
 
 /* ---------- Codificación ---------- */
@@ -467,7 +476,7 @@ function updateButtons() {
 }
 
 function setBusy(busy) {
-  document.querySelectorAll(".controls input, .controls select, .trim input, .trim button").forEach((el) => (el.disabled = busy));
+  document.querySelectorAll(".controls input, .controls select, .trim input, .trim button, .side input, .side button").forEach((el) => (el.disabled = busy));
   $("drop").classList.toggle("busy", busy);
   $("progress").hidden = !busy;
   if (!busy) $("progressBar").style.width = "0";
@@ -601,6 +610,24 @@ function renderResults() {
     tr.appendChild(td);
     rows.push(tr);
   }
+  // El poster no depende de la conversión: se muestra el actual (cambiarlo no obliga a recodificar).
+  if (poster) {
+    const name = fileNames(s).poster;
+    const tr = document.createElement("tr");
+    tr.append(
+      cell(`${name} · WebP`),
+      cell(fmt(poster.blob.size), "num ok"),
+      cell("—", "num dim"),
+      cell(`${poster.width}×${poster.height}`, "num"),
+      cell("—", "num dim"),
+      cell("—", "num dim"),
+    );
+    const td = document.createElement("td");
+    td.className = "num";
+    td.appendChild(Object.assign(document.createElement("a"), { href: poster.url, download: name, textContent: "↓ .webp" }));
+    tr.appendChild(td);
+    rows.push(tr);
+  }
   tbody.replaceChildren(...rows);
   $("results").hidden = false;
 }
@@ -650,6 +677,7 @@ async function convert() {
     renderResults();
   }
   updateButtons();
+  if (!poster) schedulePoster(0); // por si se pidió mientras se codificaba
 }
 
 $("convert").addEventListener("click", async () => {
@@ -660,15 +688,20 @@ $("convert").addEventListener("click", async () => {
   try { await converting.conversion?.cancel(); } catch (e) {}
 });
 
-// ZIP provisional con los vídeos; en la fase 4 se añaden poster, snippet y cabeceras.
-$("zip").addEventListener("click", async () => {
-  const s = settings();
+// ZIP provisional con vídeos y poster; en la fase 4 se añaden snippet y cabeceras.
+async function buildZip(s) {
   const zip = new JSZip();
   for (const o of outputs.filter((o) => o.blob)) {
     zip.file(fileNames({ ...s, height: o.info.height })[o.kind], o.blob);
   }
+  if (poster) zip.file(fileNames(s).poster, poster.blob);
   // Vídeo e imágenes ya van comprimidos: STORE evita gastar tiempo en deflate.
-  const blob = await zip.generateAsync({ type: "blob", compression: "STORE" });
+  return zip.generateAsync({ type: "blob", compression: "STORE" });
+}
+
+$("zip").addEventListener("click", async () => {
+  const s = settings();
+  const blob = await buildZip(s);
   const a = document.createElement("a");
   a.href = URL.createObjectURL(blob);
   a.download = `${s.slug}-v${s.version}.zip`;
@@ -704,6 +737,7 @@ function renderTrim() {
   $("startOut").textContent = fmtTime(trim.start);
   $("endOut").textContent = fmtTime(trim.end);
   $("durOut").textContent = num(trim.end - trim.start) + " s";
+  syncPosterTime();
 }
 
 function onTrimInput(which) {
@@ -749,6 +783,176 @@ $("playTrim").addEventListener("click", () => {
 // Reproduce en bucle solo el tramo recortado.
 preview.addEventListener("timeupdate", () => {
   if (!preview.paused && preview.currentTime >= trim.end) preview.currentTime = trim.start;
+});
+
+/* ---------- Poster ---------- */
+
+const POSTER_QUALITY = 0.75;
+const IMAGE_EXT = /\.(jpe?g|png|webp|avif|gif)$/i;
+const isImage = (f) => IMAGE_EXT.test(f.name) || f.type.startsWith("image/");
+
+let poster = null; // { blob, url, width, height } con los ajustes actuales
+let posterImage = null; // { file, bitmap } si se usa una imagen propia
+let posterTime = 0;
+let posterTimeTouched = false; // mientras no se toque, el poster sigue al inicio del recorte
+let posterSink = null;
+let posterSinkKey = "";
+let posterSeq = 0;
+let posterTimer = 0;
+let posterNote = "";
+
+const posterMode = () => document.querySelector('input[name="posterMode"]:checked').value;
+function setPosterMode(mode) {
+  document.querySelectorAll('input[name="posterMode"]').forEach((r) => (r.checked = r.value === mode));
+  $("posterTimeField").hidden = mode !== "frame";
+  $("posterImageField").hidden = mode !== "image";
+}
+
+function resetPoster() {
+  if (poster) URL.revokeObjectURL(poster.url);
+  poster = null;
+  posterImage?.bitmap.close();
+  posterImage = null;
+  posterSink = null;
+  posterSinkKey = "";
+  posterTime = 0;
+  posterTimeTouched = false;
+  $("posterImageName").textContent = "Sin imagen";
+  setPosterMode("frame");
+}
+
+// El slider del poster se limita al tramo recortado. Por defecto, el primer fotograma:
+// así el fundido del snippet del poster al vídeo no tiene salto.
+function syncPosterTime() {
+  const range = $("posterTime");
+  range.min = trim.start.toFixed(2);
+  range.max = Math.max(trim.start, trim.end - 0.04).toFixed(2);
+  if (!posterTimeTouched) posterTime = trim.start;
+  posterTime = Math.min(Math.max(posterTime, trim.start), +range.max);
+  range.value = posterTime;
+  $("posterTimeOut").textContent = fmtTime(posterTime);
+  if (posterMode() === "frame") schedulePoster();
+}
+
+function schedulePoster(delay = 120) {
+  if (!source) return;
+  clearTimeout(posterTimer);
+  posterTimer = setTimeout(updatePoster, delay);
+}
+
+async function canvasToWebp(canvas) {
+  const blob = canvas.convertToBlob
+    ? await canvas.convertToBlob({ type: "image/webp", quality: POSTER_QUALITY })
+    : await new Promise((res) => canvas.toBlob(res, "image/webp", POSTER_QUALITY));
+  if (!blob || blob.type !== "image/webp") throw new Error("este navegador no puede exportar WebP");
+  return blob;
+}
+
+async function frameCanvas(s) {
+  const key = `${s.width}x${s.height}`;
+  if (!posterSink || posterSinkKey !== key) {
+    // Mismo tamaño y encuadre que el vídeo de salida (cover sobre dimensiones pares).
+    posterSink = new window.Mediabunny.CanvasSink(source.videoTrack, { width: s.width, height: s.height, fit: "cover" });
+    posterSinkKey = key;
+  }
+  const frame = (await posterSink.getCanvas(posterTime))
+    || (await posterSink.getCanvas(await source.videoTrack.getFirstTimestamp()));
+  if (!frame) throw new Error("no se pudo extraer el fotograma");
+  posterNote = "";
+  return frame.canvas;
+}
+
+// La imagen propia se recorta (cover) a la proporción del vídeo, para que el width/height del
+// snippet sea el mismo en poster y vídeo y no haya salto de layout.
+function imageCanvas(s) {
+  const { bitmap, file } = posterImage;
+  const canvas = document.createElement("canvas");
+  canvas.width = s.width;
+  canvas.height = s.height;
+  const ctx = canvas.getContext("2d");
+  ctx.imageSmoothingQuality = "high";
+  const scale = Math.max(s.width / bitmap.width, s.height / bitmap.height);
+  const w = bitmap.width * scale;
+  const h = bitmap.height * scale;
+  ctx.drawImage(bitmap, (s.width - w) / 2, (s.height - h) / 2, w, h);
+  const notes = [];
+  if (Math.abs(bitmap.width / bitmap.height - s.width / s.height) > 0.01) {
+    notes.push(`«${file.name}» (${bitmap.width}×${bitmap.height}) se recorta al centro para encajar en la proporción del vídeo.`);
+  }
+  if (scale > 1.01) notes.push("La imagen es más pequeña que el vídeo: se amplía y puede verse borrosa.");
+  posterNote = notes.join(" ");
+  return canvas;
+}
+
+async function updatePoster() {
+  if (!source || converting) return;
+  const seq = ++posterSeq;
+  const s = settings();
+  const usingImage = posterMode() === "image" && posterImage;
+  try {
+    const canvas = usingImage ? imageCanvas(s) : await frameCanvas(s);
+    if (seq !== posterSeq) return;
+    const view = $("posterCanvas");
+    view.width = canvas.width;
+    view.height = canvas.height;
+    view.getContext("2d").drawImage(canvas, 0, 0);
+    const blob = await canvasToWebp(canvas);
+    if (seq !== posterSeq) return;
+    if (poster) URL.revokeObjectURL(poster.url);
+    poster = { blob, url: URL.createObjectURL(blob), width: canvas.width, height: canvas.height };
+  } catch (err) {
+    if (seq !== posterSeq) return;
+    if (poster) URL.revokeObjectURL(poster.url);
+    poster = null;
+    posterNote = "No se pudo generar el poster: " + err.message + ".";
+  }
+  renderPosterInfo();
+  if (outputs.length) renderResults();
+}
+
+function renderPosterInfo() {
+  const info = $("posterInfo");
+  if (!source) return info.replaceChildren();
+  const parts = [];
+  if (poster) {
+    const what = posterMode() === "image" && posterImage ? "imagen propia" : `fotograma ${fmtTime(posterTime)}`;
+    parts.push(`${fileNames(settings()).poster} · ${poster.width}×${poster.height} · WebP calidad ${Math.round(POSTER_QUALITY * 100)} · ${fmt(poster.blob.size)} · ${what}.`);
+  }
+  if (posterMode() === "image" && !posterImage) parts.push("Elige una imagen; mientras tanto se usa el fotograma.");
+  if (posterNote) parts.push(posterNote);
+  info.textContent = parts.join(" ");
+  info.classList.toggle("err", !poster);
+}
+
+async function setPosterImage(file) {
+  try {
+    const bitmap = await createImageBitmap(file);
+    posterImage?.bitmap.close();
+    posterImage = { file, bitmap };
+    $("posterImageName").textContent = file.name;
+    setPosterMode("image");
+    $("summary").textContent = `Poster: se usará «${file.name}».`;
+    schedulePoster(0);
+  } catch (err) {
+    $("summary").textContent = `No se pudo leer la imagen «${file.name}»: formato no compatible.`;
+  }
+}
+
+$("posterTime").addEventListener("input", () => {
+  posterTimeTouched = true;
+  posterTime = +$("posterTime").value;
+  $("posterTimeOut").textContent = fmtTime(posterTime);
+  schedulePoster(60);
+});
+document.querySelectorAll('input[name="posterMode"]').forEach((r) => r.addEventListener("change", () => {
+  setPosterMode(r.value);
+  if (r.value === "image" && !posterImage) $("posterFile").click();
+  schedulePoster(0);
+}));
+$("pickPoster").addEventListener("click", () => $("posterFile").click());
+$("posterFile").addEventListener("change", (e) => {
+  if (e.target.files[0]) setPosterImage(e.target.files[0]);
+  e.target.value = "";
 });
 
 /* ---------- Inicio ---------- */
