@@ -361,6 +361,9 @@ async function analyze(file) {
       audioTrack ? audioTrack.getCodec() : null,
     ]);
     const usableAudio = audioTrack && (await audioTrack.canDecode()) ? audioTrack : null;
+    // Conversion copia el nombre de cada pista del original (p. ej. «Stereo») y `tags: {}` solo quita
+    // los metadatos globales. Sin opción para evitarlo en Mediabunny 1.62, se anula en estas instancias.
+    for (const t of await input.getTracks()) t.getName = async () => null;
     return {
       file, input, videoTrack, audioTrack: usableAudio, hadAudio: !!audioTrack,
       width, height, duration, videoCodec, audioCodec,
@@ -711,8 +714,6 @@ function deliverables(s) {
   const mode = $("snippetMode").value;
   return {
     mode,
-    // El id del hero contiene «hv-hero»: es la palabra a excluir en optimizadores que retrasan
-    // scripts inline buscando texto en su contenido.
     id: `hv-${mode === "controls" ? "player" : "hero"}-${s.slug}-v${s.version}`,
     width, height,
     base: s.basePath,

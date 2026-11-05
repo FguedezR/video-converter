@@ -28,8 +28,8 @@ function heroSnippet(d, url) {
       ? "Fondo: el contenido de .hv-content va encima del vídeo. El hero mide al menos la proporción del vídeo y crece con el contenido."
       : "Bloque: ocupa el ancho de su contenedor con la proporción del vídeo.",
     `El <video> se crea por JS tras «load», solo con ${MIN_DESKTOP_WIDTH} px de ancho o más, sin «reducir movimiento»`,
-    "y sin ahorro de datos. En los demás casos se queda la imagen, que es el elemento LCP.",
-    "Si un optimizador retrasa los scripts inline hasta la primera interacción, excluye este (contiene «hv-hero»).",
+    "y sin ahorro de datos. En los demás casos se queda la imagen.",
+    "El poster es el candidato a LCP; si el hero ocupa toda la ventana, Chrome lo trata como fondo y el LCP pasa al texto.",
     "-->",
     `<div id="${d.id}" class="hv-hero${bg ? " hv-bg" : ""}">`,
     // OPTIMIZACIÓN: poster como <img> real (no fondo CSS) para que el navegador lo descubra en el HTML.
