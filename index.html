@@ -1,0 +1,144 @@
+<!doctype html>
+<html lang="es" data-accent="blue">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <meta name="theme-color" content="#07090d">
+  <title>Convertidor de vídeo</title>
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <link rel="icon" href="favicon.ico" sizes="48x48">
+  <link rel="preload" href="fonts/GeistMono-Variable.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="preload" href="fonts/GeistPixel-Square.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <main>
+    <header>
+      <div class="topbar">
+        <p class="eyebrow">Procesado en tu navegador · sin subidas</p>
+        <nav class="links" aria-label="Enlaces">
+          <a href="https://ferguedez.dev" target="_blank" rel="noopener">ferguedez.dev<span aria-hidden="true"> ↗</span></a>
+          <a href="https://github.com/FguedezR" target="_blank" rel="noopener">GitHub<span aria-hidden="true"> ↗</span></a>
+        </nav>
+      </div>
+      <h1>Video<br>Converter</h1>
+    </header>
+
+    <div id="support" class="notice" role="alert" hidden></div>
+
+    <label id="drop" class="drop" tabindex="0">
+      <input id="file" type="file" accept="video/mp4,video/quicktime,video/webm,.mp4,.mov,.m4v,.webm" hidden>
+      <svg id="iconVideo" class="drop-icon" viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" aria-hidden="true" hidden><path d="M2.75 5.75h13.5v12.5H2.75z"/><path d="M16.25 10.25l5-3v9.5l-5-3"/></svg>
+      <span id="dropTitle" class="drop-title">Suelta un vídeo</span>
+      <span id="dropHint" class="drop-hint">MP4 · MOV · WebM · un vídeo cada vez</span>
+    </label>
+
+    <section id="editor" class="editor" aria-label="Vista previa y recorte" hidden>
+      <div class="preview">
+        <video id="preview" muted playsinline preload="auto"></video>
+        <p id="previewError" class="preview-error" hidden>El navegador no puede mostrar la vista previa de este archivo, pero el recorte sigue funcionando.</p>
+      </div>
+      <div class="trim">
+        <div class="field">
+          <label for="trimStart">Inicio <output id="startOut">0:00.0</output></label>
+          <input id="trimStart" type="range" min="0" max="0" step="0.1" value="0">
+        </div>
+        <div class="field">
+          <label for="trimEnd">Fin <output id="endOut">0:00.0</output></label>
+          <input id="trimEnd" type="range" min="0" max="0" step="0.1" value="0">
+        </div>
+        <div class="trim-foot">
+          <span>Duración <output id="durOut">0,0 s</output></span>
+          <button id="playTrim" class="link" type="button">▶ Reproducir recorte</button>
+          <button id="resetTrim" class="link" type="button">Sin recorte</button>
+        </div>
+      </div>
+    </section>
+
+    <section class="controls first" aria-label="Preset">
+      <fieldset class="presets">
+        <legend>Preset</legend>
+        <label><input type="radio" name="preset" value="hero" checked><span>Hero de fondo</span><small>720p · 1,5 Mbps · sin audio</small></label>
+        <label><input type="radio" name="preset" value="hero1080"><span>Hero 1080p</span><small>1080p · 3 Mbps · sin audio</small></label>
+        <label><input type="radio" name="preset" value="content"><span>Vídeo de contenido</span><small>1080p · 4 Mbps · con audio</small></label>
+        <label><input type="radio" name="preset" value="custom"><span>Personalizado</span><small>valores libres</small></label>
+      </fieldset>
+      <div class="field">
+        <label for="maxHeight">Resolución máx.</label>
+        <select id="maxHeight">
+          <option value="360">360p</option>
+          <option value="480">480p</option>
+          <option value="540">540p</option>
+          <option value="720">720p</option>
+          <option value="1080">1080p</option>
+          <option value="1440">1440p</option>
+          <option value="2160">2160p</option>
+          <option value="0">Original</option>
+        </select>
+      </div>
+      <div class="field">
+        <label for="bitrate">Vídeo Mbps</label>
+        <input id="bitrate" type="number" min="0.2" max="50" step="0.1" value="1.5">
+      </div>
+      <div class="field">
+        <label for="audio">Audio</label>
+        <select id="audio">
+          <option value="0">Sin audio</option>
+          <option value="96">96 kbps</option>
+          <option value="128">128 kbps</option>
+          <option value="160">160 kbps</option>
+          <option value="192">192 kbps</option>
+        </select>
+      </div>
+    </section>
+
+    <section class="controls" aria-label="Salida">
+      <div class="field grow">
+        <label for="slug">Slug</label>
+        <input id="slug" type="text" spellcheck="false" autocomplete="off" placeholder="nombre-del-video">
+      </div>
+      <div class="field narrow">
+        <label for="version">Versión</label>
+        <input id="version" type="number" min="1" max="999" step="1" value="1">
+      </div>
+      <div class="field grow">
+        <label for="basePath">Ruta base</label>
+        <input id="basePath" type="text" spellcheck="false" autocomplete="off">
+      </div>
+      <div class="field narrow">
+        <label for="targetMb">Objetivo MB</label>
+        <input id="targetMb" type="number" min="0.5" max="500" step="0.5" value="8">
+      </div>
+    </section>
+
+    <section class="estimate" aria-label="Estimación" aria-live="polite">
+      <div class="table-wrap">
+        <table id="estimate">
+          <thead><tr><th>Salida</th><th>Códec</th><th class="num">Resolución</th><th class="num">fps</th><th class="num">Bitrate</th><th class="num">Peso estimado</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+      <p id="estimateNote" class="hint"></p>
+    </section>
+
+    <section class="controls actions-row" aria-label="Acciones">
+      <div class="actions">
+        <button id="convert" class="primary" type="button" disabled>Convertir</button>
+        <button id="zip" type="button" disabled>ZIP</button>
+      </div>
+    </section>
+
+    <p id="summary" class="status" role="status" aria-live="polite">Esperando un vídeo.</p>
+
+    <div class="table-wrap">
+      <table id="results" hidden>
+        <thead><tr><th>Archivo</th><th class="num">Peso</th><th class="num">Bitrate</th><th class="num">Resolución</th><th class="num">fps</th><th class="num">Duración</th><th></th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </main>
+  <script src="vendor/jszip.min.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
