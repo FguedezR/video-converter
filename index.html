@@ -126,8 +126,16 @@
         <input id="version" type="number" min="1" max="999" step="1" value="1">
       </div>
       <div class="field grow">
-        <label for="basePath">Ruta base</label>
-        <input id="basePath" type="text" spellcheck="false" autocomplete="off">
+        <label for="basePath">Ruta base o URL</label>
+        <input id="basePath" type="text" spellcheck="false" autocomplete="off" placeholder="/media/ o https://cdn.ejemplo.com/media/">
+      </div>
+      <div class="field">
+        <label for="snippetMode">Snippet</label>
+        <select id="snippetMode" class="wide">
+          <option value="bg">Fondo (contenido encima)</option>
+          <option value="block">Bloque (solo vídeo)</option>
+          <option value="controls">Con controles y sonido</option>
+        </select>
       </div>
       <div class="field narrow">
         <label for="targetMb">Objetivo MB</label>
@@ -161,8 +169,17 @@
         <tbody></tbody>
       </table>
     </div>
+
+    <section id="snippetBox" class="code-box" aria-label="Snippet" hidden>
+      <div class="code-head">
+        <span>snippet.html · pégalo en tu HTML</span>
+        <button id="copySnippet" class="link" type="button">Copiar</button>
+      </div>
+      <pre><code id="snippetCode"></code></pre>
+    </section>
   </main>
   <script src="vendor/jszip.min.js"></script>
+  <script src="generators.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

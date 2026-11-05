@@ -13,9 +13,9 @@ const MIN_DURATION = 0.5; // recorte mínimo, en segundos
 const OVERHEAD = 1.02; // cabeceras del contenedor sobre bitrate × duración
 
 const PRESETS = {
-  hero: { maxHeight: 720, bitrate: 1.5, audio: 0 },
-  hero1080: { maxHeight: 1080, bitrate: 3, audio: 0 },
-  content: { maxHeight: 1080, bitrate: 4, audio: 128 },
+  hero: { maxHeight: 720, bitrate: 1.5, audio: 0, snippet: "bg" },
+  hero1080: { maxHeight: 1080, bitrate: 3, audio: 0, snippet: "block" },
+  content: { maxHeight: 1080, bitrate: 4, audio: 128, snippet: "controls" },
 };
 
 let source = null; // vídeo analizado: { file, input, videoTrack, audioTrack, width, height, fps, duration, ... }
@@ -43,10 +43,8 @@ const codecName = (c) => CODEC_NAMES[c] || (c ? c.toUpperCase() : "desconocido")
 const slugify = (s) => s.normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase()
   .replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "") || "video";
 
-function defaultBasePath() {
-  const d = new Date();
-  return `/wp-content/uploads/${d.getFullYear()}/${String(d.getMonth() + 1).padStart(2, "0")}/`;
-}
+// Ruta (o URL completa) donde se publicarán los archivos; el snippet la antepone a cada nombre.
+const defaultBasePath = () => "/media/";
 function basePath() {
   let p = $("basePath").value.trim() || defaultBasePath();
   if (!p.endsWith("/")) p += "/";
@@ -64,13 +62,14 @@ function applyPreset(name) {
   $("maxHeight").value = p.maxHeight;
   $("bitrate").value = p.bitrate;
   $("audio").value = p.audio;
+  $("snippetMode").value = p.snippet;
 }
 
 function savePrefs() {
   try {
     localStorage.setItem("video-prefs", JSON.stringify({
       preset: currentPreset(), maxHeight: $("maxHeight").value, bitrate: $("bitrate").value,
-      audio: $("audio").value, targetMb: $("targetMb").value,
+      audio: $("audio").value, targetMb: $("targetMb").value, snippetMode: $("snippetMode").value,
     }));
   } catch (e) {}
 }
@@ -84,6 +83,7 @@ function loadPrefs() {
       $("maxHeight").value = p.maxHeight;
       $("bitrate").value = p.bitrate;
       $("audio").value = p.audio;
+      if (p.snippetMode) $("snippetMode").value = p.snippetMode;
     }
   }
   if (p && +p.targetMb > 0) $("targetMb").value = p.targetMb;
@@ -105,6 +105,8 @@ presetRadios.forEach((r) => r.addEventListener("change", () => {
 }));
 $("targetMb").addEventListener("input", () => { savePrefs(); renderEstimate(); });
 ["slug", "version", "basePath"].forEach((id) => $(id).addEventListener("input", renderEstimate));
+// El tipo de snippet no afecta a la codificación: solo regenera el texto.
+$("snippetMode").addEventListener("change", () => { savePrefs(); renderSnippet(); });
 $("slug").addEventListener("change", () => { $("slug").value = slugify($("slug").value); renderEstimate(); });
 $("basePath").addEventListener("change", () => { $("basePath").value = basePath(); });
 
@@ -294,9 +296,14 @@ function renderEstimate() {
     if (maxRate >= 200000) fixes.push(`baja el vídeo a ≤ ${num(maxRate / 1e6, 2)} Mbps`);
     if (s.audioBitrate) fixes.push("quita el audio");
     lines.push(err, ` Para entrar: ${fixes.join(", o ")}.`);
-  } else {
-    lines.push(`Por debajo del objetivo de ${targetMb.toLocaleString("es-ES", { maximumFractionDigits: 1 })} MB por archivo.`);
   }
+  if (bytes > CF_MAX_FILE) {
+    const err = document.createElement("span");
+    err.className = "err";
+    err.textContent = " Cloudflare Pages no publica archivos de más de 25 MiB: recorta o baja el bitrate (o sírvelo desde R2).";
+    lines.push(err);
+  }
+  if (!over) lines.push(`Por debajo del objetivo de ${targetMb.toLocaleString("es-ES", { maximumFractionDigits: 1 })} MB por archivo.`);
   lines.push(` Duración ${num(s.duration)} s · keyframe cada ${KEYFRAME_INTERVAL} s · sin metadatos.`);
   if (s.capped) lines.push(" El bitrate se limita al del original para no inflar el archivo.");
   if (source.fps > MAX_FPS + 0.01) lines.push(` Se baja de ${fmtFps(source.fps)} a ${MAX_FPS} fps.`);
@@ -472,7 +479,9 @@ function updateButtons() {
   const anyCodec = !support || support.vp9.ok || support.avc.ok;
   const upToDate = !!source && outputs.length > 0 && settingsKey(settings()) === convertedKey;
   btn.disabled = !source || !anyCodec || upToDate;
-  $("zip").disabled = !outputs.some((o) => o.blob);
+  // Si cambian ajustes que obligan a recodificar, el ZIP mezclaría vídeos viejos con poster y snippet nuevos.
+  $("zip").disabled = !outputs.some((o) => o.blob) || !upToDate || !poster;
+  $("zip").title = $("zip").disabled && outputs.length && !upToDate ? "Los ajustes han cambiado: vuelve a convertir" : "";
 }
 
 function setBusy(busy) {
@@ -488,6 +497,7 @@ function clearOutputs() {
   convertedKey = "";
   $("results").hidden = true;
   $("results").querySelector("tbody").replaceChildren();
+  $("snippetBox").hidden = true;
 }
 
 const DISCARD_REASONS = {
@@ -630,6 +640,7 @@ function renderResults() {
   }
   tbody.replaceChildren(...rows);
   $("results").hidden = false;
+  renderSnippet();
 }
 
 async function convert() {
@@ -688,14 +699,60 @@ $("convert").addEventListener("click", async () => {
   try { await converting.conversion?.cancel(); } catch (e) {}
 });
 
-// ZIP provisional con vídeos y poster; en la fase 4 se añaden snippet y cabeceras.
+/* ---------- Snippet, cabeceras y ZIP ---------- */
+
+// Datos comunes a snippet.html y _headers, sacados de las salidas reales.
+function deliverables(s) {
+  const done = outputs.filter((o) => o.blob);
+  if (!done.length || !poster) return null;
+  const { width, height } = done[0].info;
+  const names = fileNames({ ...s, height });
+  const has = (kind) => done.some((o) => o.kind === kind);
+  const mode = $("snippetMode").value;
+  return {
+    mode,
+    // El id del hero contiene «hv-hero»: es la palabra a excluir en optimizadores que retrasan
+    // scripts inline buscando texto en su contenido.
+    id: `hv-${mode === "controls" ? "player" : "hero"}-${s.slug}-v${s.version}`,
+    width, height,
+    base: s.basePath,
+    webm: has("webm") ? names.webm : null,
+    mp4: has("mp4") ? names.mp4 : null,
+    poster: names.poster,
+    slug: s.slug,
+    version: s.version,
+  };
+}
+
+function renderSnippet() {
+  const d = source && deliverables(settings());
+  $("snippetBox").hidden = !d;
+  if (d) $("snippetCode").textContent = buildSnippet(d);
+}
+
+$("copySnippet").addEventListener("click", async () => {
+  try {
+    await navigator.clipboard.writeText($("snippetCode").textContent);
+    $("copySnippet").textContent = "Copiado";
+  } catch (e) {
+    $("copySnippet").textContent = "No se pudo copiar";
+  }
+  setTimeout(() => ($("copySnippet").textContent = "Copiar"), 2000);
+});
+
+// ZIP final: vídeos, poster, snippet.html y _headers (Cloudflare).
 async function buildZip(s) {
   const zip = new JSZip();
   for (const o of outputs.filter((o) => o.blob)) {
     zip.file(fileNames({ ...s, height: o.info.height })[o.kind], o.blob);
   }
   if (poster) zip.file(fileNames(s).poster, poster.blob);
-  // Vídeo e imágenes ya van comprimidos: STORE evita gastar tiempo en deflate.
+  const d = deliverables(s);
+  if (d) {
+    zip.file("snippet.html", buildSnippet(d), { compression: "DEFLATE" });
+    zip.file("_headers", buildHeaders(d), { compression: "DEFLATE" });
+  }
+  // Vídeo e imágenes ya van comprimidos: STORE evita gastar tiempo en deflate (los textos sí van con DEFLATE).
   return zip.generateAsync({ type: "blob", compression: "STORE" });
 }
 
@@ -908,6 +965,7 @@ async function updatePoster() {
   }
   renderPosterInfo();
   if (outputs.length) renderResults();
+  updateButtons();
 }
 
 function renderPosterInfo() {

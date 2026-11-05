@@ -119,6 +119,14 @@ td.ok { color: var(--accent); }
 td.dim { color: var(--muted); }
 td.nowrap { white-space: nowrap; }
 
+select.wide { width: 260px; max-width: 100%; }
+
+.code-box { margin-top: 32px; border: 1px solid var(--line-strong); background: var(--surface); }
+.code-box[hidden] { display: none; }
+.code-head { display: flex; justify-content: space-between; align-items: baseline; gap: 16px; padding: 10px 16px; border-bottom: 1px solid var(--line); color: var(--muted); font-size: 11px; letter-spacing: .12em; text-transform: uppercase; }
+.code-head .link { padding: 0; font-size: 11px; letter-spacing: .12em; text-transform: uppercase; }
+.code-box pre { margin: 0; padding: 16px; max-height: 360px; overflow: auto; font: 400 11px/1.6 var(--mono); color: var(--fg); white-space: pre; }
+
 .progress { height: 2px; margin: 0 0 12px; background: var(--line-strong); }
 .progress[hidden] { display: none; }
 .progress span { display: block; width: 0; height: 100%; background: var(--accent); transition: width .2s linear; }

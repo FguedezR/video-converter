@@ -1,7 +1,9 @@
 # Video Converter (herramienta interna de Hadock)
 
-Compresor de vídeos para heros de fondo en WordPress/Divi 5. Todo se procesa en el
-navegador con WebCodecs (librería Mediabunny); no se sube nada a ningún servidor.
+Compresor de vídeos para heros de fondo. Todo se procesa en el navegador con WebCodecs
+(librería Mediabunny); no se sube nada a ningún servidor. Se publica en GitHub y se aloja en
+Cloudflare Pages; lo que genera (snippet y cabeceras) es genérico, sin dependencias de
+WordPress, Divi ni plugins.
 Hermano del WebP Converter (https://webp.ferguedez.dev/, repo FguedezR/webp-converter),
 del que hereda estructura, estilo y front.
 
@@ -11,11 +13,12 @@ del que hereda estructura, estilo y front.
 index.html      # una sola página, lang="es", data-accent="blue"
 style.css       # tokens en :root, sin preprocesador
 app.js          # script clásico (no type="module"), cargado al final de <body>
+generators.js   # funciones puras que generan snippet.html y _headers (cargado antes de app.js)
 vendor/         # librerías de terceros ya minificadas, versión fijada en el nombre o cabecera
 fonts/          # GeistMono-Variable.woff2, GeistPixel-Square.woff2 + LICENSE-Geist-OFL.txt
 favicon.svg / favicon.ico
 _headers        # cabeceras de Cloudflare Pages
-.gitignore      # solo .DS_Store
+.gitignore      # .DS_Store y _test/ (vídeos de prueba locales)
 ```
 
 - **Sin build step**: nada de package.json, npm, bundler, TypeScript ni frameworks. Lo que
@@ -68,8 +71,14 @@ _headers        # cabeceras de Cloudflare Pages
 - Dimensiones pares, sin escalar hacia arriba, máx. 30 fps, keyframe cada ~2 s, metadatos
   eliminados, MP4 con moov al principio (fast start).
 - Nombres versionados: `[slug]-[alto]p-v[n].webm|mp4`, `[slug]-poster-v[n].webp`.
-- El snippet generado usa prefijo `hv-`, el poster `<img>` es el LCP y el `<video>` se crea
-  por JS tras `load`; nunca en viewport < 981 px, `prefers-reduced-motion` o `saveData`.
+- El snippet generado es HTML/CSS/JS genérico (nada de WordPress, Divi ni plugins), usa
+  prefijo `hv-`, el poster `<img>` es el LCP y el `<video>` se crea por JS tras `load`; nunca
+  en viewport < 981 px, `prefers-reduced-motion` o `saveData`. Rutas = «Ruta base o URL» +
+  nombre de archivo.
+- Cabeceras: archivo `_headers` de Cloudflare (una regla por extensión; un solo `*` por patrón;
+  reglas que coinciden se suman con comas, así que nunca dos Cache-Control activos para la
+  misma URL). `immutable` solo en vídeo por defecto; variante sin immutable comentada.
+- Cloudflare Pages no admite archivos de más de 25 MiB: avisar antes de codificar.
 
 ## Git y despliegue
 
